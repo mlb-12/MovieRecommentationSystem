@@ -48,7 +48,7 @@ CLASS_FEATURES = ["popularity", "runtime", "vote_average", "release_year"]
 
 def fig_to_base64(fig):
     buffer = io.BytesIO()
-    fig.savefig(buffer, format="png", dpi=130, bbox_inches="tight")
+    fig.savefig(buffer, format="png", dpi=110, bbox_inches="tight")
     plt.close(fig)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
@@ -267,25 +267,26 @@ def build_notebook_analytics():
         ax.grid(alpha=0.2)
         result["cluster_plot"] = fig_to_base64(fig)
 
-        # Notebook K-Means model selection: K=2..10, n_init=10, random_state=42.
+        # Memory-efficient K-Means model selection on a representative sample.
+        # Inertia and silhouette values are sample-based estimates.
         k_values = list(range(2, 11))
         inertias, silhouette_values = [], []
-        silhouette_rng = np.random.default_rng(42)
-        silhouette_idx = silhouette_rng.choice(
-            len(scaled), size=min(10000, len(scaled)), replace=False
-        )
-        X_silhouette = scaled[silhouette_idx]
-        for k in k_values:
-            candidate = KMeans(n_clusters=k, random_state=42, n_init=10)
-            candidate.fit(scaled)
-            inertias.append(float(candidate.inertia_))
 
-            silhouette_candidate = KMeans(
-                n_clusters=k, random_state=42, n_init=10
+        rng = np.random.default_rng(42)
+        model_selection_size = min(3000, len(scaled))
+        sample_idx = rng.choice(
+            len(scaled), size=model_selection_size, replace=False
+        )
+        X_model_selection = scaled[sample_idx]
+
+        for k in k_values:
+            candidate = KMeans(
+                n_clusters=k, random_state=42, n_init=5, algorithm="lloyd"
             )
-            sample_labels = silhouette_candidate.fit_predict(X_silhouette)
+            sample_labels = candidate.fit_predict(X_model_selection)
+            inertias.append(float(candidate.inertia_))
             silhouette_values.append(
-                float(silhouette_score(X_silhouette, sample_labels))
+                float(silhouette_score(X_model_selection, sample_labels))
             )
 
         result["elbow_rows"] = [
@@ -301,7 +302,7 @@ def build_notebook_analytics():
         ax.plot(k_values, inertias, marker="o")
         ax.set_xlabel("Number of Clusters (K)")
         ax.set_ylabel("Inertia")
-        ax.set_title("K-Means Elbow Analysis")
+        ax.set_title(f"K-Means Elbow Analysis ({model_selection_size:,}-row sample)")
         ax.grid(alpha=0.25)
         result["elbow_plot"] = fig_to_base64(fig)
 
@@ -312,15 +313,22 @@ def build_notebook_analytics():
                    label=f"Best sampled K = {best_k}")
         ax.set_xlabel("Number of Clusters (K)")
         ax.set_ylabel("Silhouette Score")
-        ax.set_title("Silhouette Analysis (10,000-row sample)")
+        ax.set_title(f"Silhouette Analysis ({model_selection_size:,}-row sample)")
         ax.legend()
         ax.grid(alpha=0.25)
         result["silhouette_plot"] = fig_to_base64(fig)
         result["best_silhouette_k"] = int(best_k)
         result["best_silhouette_score"] = float(max(silhouette_values))
 
-        # Final cluster metrics, matching the notebook's full-data evaluation.
-        final_silhouette = float(silhouette_score(scaled, labels))
+        # Sample-based silhouette avoids a full-dataset pairwise-distance calculation.
+        # Davies-Bouldin and Calinski-Harabasz are still calculated on all valid rows.
+        final_silhouette = float(
+            silhouette_score(
+                scaled, labels,
+                sample_size=min(2000, len(scaled)),
+                random_state=42
+            )
+        )
         db_index = float(davies_bouldin_score(scaled, labels))
         ch_score = float(calinski_harabasz_score(scaled, labels))
         result["cluster_metrics"] = [
@@ -480,7 +488,7 @@ def build_notebook_analytics():
 
 import os
 
-if os.getenv("ENABLE_ANALYTICS", "false").lower() == "true":
+if os.getenv("ENABLE_ANALYTICS", "true").lower() == "true":
     ANALYTICS = build_notebook_analytics()
 else:
     ANALYTICS = {
@@ -1081,15 +1089,36 @@ def movie_page(title):
                 if "similarity" in results.columns:
                     results = results.sort_values("similarity", ascending=False, kind="stable")
                 recommendations = results.to_dict(orient="records")
-            vec = get_movie_vector(title).toarray().ravel()
-            selected_tfidf = f"Vector length: {len(vec)}\n\n" + np.array2string(vec, precision=6, separator=", ", threshold=vec.size, max_line_width=140)
+            # Keep TF-IDF vectors sparse and display only the highest-weight
+            # non-zero features instead of expanding dense 10,000-value arrays.
+            vec = get_movie_vector(title).tocsr()
+            top_terms = np.argsort(vec.data)[::-1][:40]
+            selected_tfidf = (
+                f"Vector length: {vec.shape[1]}\\n"
+                f"Non-zero terms: {vec.nnz}\\n"
+                "Top TF-IDF feature indices and weights:\\n"
+                + "\\n".join(
+                    f"{int(vec.indices[i])}: {float(vec.data[i]):.6f}"
+                    for i in top_terms
+                )
+            )
             for rank, item in enumerate(recommendations, 1):
-                rv = get_movie_vector(item["title"]).toarray().ravel()
+                rv = get_movie_vector(item["title"]).tocsr()
+                rv_top = np.argsort(rv.data)[::-1][:20]
+                vector_text = (
+                    f"Vector length: {rv.shape[1]}\\n"
+                    f"Non-zero terms: {rv.nnz}\\n"
+                    "Top TF-IDF feature indices and weights:\\n"
+                    + "\\n".join(
+                        f"{int(rv.indices[i])}: {float(rv.data[i]):.6f}"
+                        for i in rv_top
+                    )
+                )
                 recommendation_details.append({
                     "rank": rank,
                     "title": item.get("title", "Movie"),
                     "similarity": float(item.get("similarity", 0.0)),
-                    "tfidf": f"Vector length: {len(rv)}\n\n" + np.array2string(rv, precision=6, separator=", ", threshold=rv.size, max_line_width=140)
+                    "tfidf": vector_text
                 })
             feature_values = np.array([[float(movie.get(c, 0) or 0) for c in CLASS_FEATURES]], dtype=float)
             scaled = cluster_scaler.transform(feature_values)
