@@ -53,46 +53,6 @@ def fig_to_base64(fig):
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
-def calculate_entropy(y_values):
-    if len(y_values) == 0:
-        return 0.0
-    counts = pd.Series(y_values).value_counts()
-    probabilities = counts / len(y_values)
-    return float(-np.sum(probabilities * np.log2(probabilities)))
-
-
-def calculate_information_gain(parent_y, left_y, right_y):
-    if len(parent_y) == 0:
-        return 0.0
-    left_weight = len(left_y) / len(parent_y)
-    right_weight = len(right_y) / len(parent_y)
-    child_entropy = (
-        left_weight * calculate_entropy(left_y)
-        + right_weight * calculate_entropy(right_y)
-    )
-    return calculate_entropy(parent_y) - child_entropy
-
-
-def find_best_information_gain_split(X_data, y_data, feature_names):
-    best_feature, best_threshold, best_gain = None, None, -1.0
-    for feature_index, feature_name in enumerate(feature_names):
-        values = X_data[:, feature_index]
-        thresholds = np.percentile(values, [20, 40, 60, 80])
-        for threshold in thresholds:
-            left_mask = values <= threshold
-            right_mask = values > threshold
-            if not left_mask.any() or not right_mask.any():
-                continue
-            gain = calculate_information_gain(
-                y_data, y_data[left_mask], y_data[right_mask]
-            )
-            if gain > best_gain:
-                best_feature = feature_name
-                best_threshold = float(threshold)
-                best_gain = float(gain)
-    return best_feature, best_threshold, best_gain
-
-
 PCA_POINTS = None
 
 def build_notebook_analytics():
@@ -127,7 +87,6 @@ def build_notebook_analytics():
         "tree_rows": [],
         "feature_importance_rows": [],
         "class_labels": [],
-        "id3": None,
         "test_count": None,
         "train_count": None,
         "preprocessing_rows": [],
@@ -449,25 +408,6 @@ def build_notebook_analytics():
         ax.tick_params(axis="x", rotation=15)
         fig.tight_layout()
         result["importance_plot"] = fig_to_base64(fig)
-
-        # Manual entropy and candidate best root split: same 10,000 sample method
-        # and percentile thresholds as the notebook. This is NOT a full ID3 tree.
-        sample_size = min(10000, len(X_train))
-        rng = np.random.RandomState(42)
-        sample_indices = rng.choice(len(X_train), size=sample_size, replace=False)
-        X_id3 = X_train.iloc[sample_indices].to_numpy()
-        y_id3 = y_train.iloc[sample_indices].to_numpy()
-        best_feature, best_threshold, best_gain = find_best_information_gain_split(
-            X_id3, y_id3, CLASS_FEATURES
-        )
-        result["id3"] = {
-            "sample_size": int(sample_size),
-            "parent_entropy": f"{calculate_entropy(y_id3):.6f}",
-            "best_feature": best_feature,
-            "best_threshold": f"{best_threshold:.4f}" if best_threshold is not None else "—",
-            "information_gain": f"{best_gain:.6f}" if best_gain >= 0 else "—",
-            "note": "Manual Information Gain identifies the best candidate root split; this notebook does not build a complete recursive ID3 tree."
-        }
 
         # Class distribution in the classification target.
         class_counts = pd.Series(labels).value_counts().sort_index()
@@ -831,7 +771,7 @@ release_year = {{ movie.get('release_year', 0) }}{% endif %}</pre>
     <summary class="dashboard-summary">
         <span>
             <strong>Data Mining Dashboard</strong>
-            <small>Open to explore preprocessing, TF-IDF, PCA, K-Means, classification and ID3 analysis</small>
+            <small>Open to explore preprocessing, TF-IDF, PCA, K-Means and classification</small>
         </span>
         <span class="dashboard-toggle">View analysis ↓</span>
     </summary>
@@ -997,23 +937,7 @@ release_year = {{ movie.get('release_year', 0) }}{% endif %}</pre>
     </table></div>
 </section>
 
-<section class="analysis-section">
-    <h2>5. Manual Entropy &amp; ID3 Information Gain</h2>
-    <p class="section-note">
-        The notebook manually calculates entropy and tests percentile-based thresholds
-        (20th, 40th, 60th and 80th) to identify the best candidate root split.
-    </p>
-    <div class="stat-grid">
-        <div class="stat-card"><span>ID3 Demonstration Sample</span><strong>{{ analytics.id3.sample_size }}</strong></div>
-        <div class="stat-card"><span>Parent Entropy</span><strong>{{ analytics.id3.parent_entropy }}</strong></div>
-        <div class="stat-card"><span>Best Information Gain</span><strong>{{ analytics.id3.information_gain }}</strong></div>
-    </div>
-    <div class="table-wrap"><table>
-        <thead><tr><th>Best Candidate Feature</th><th>Threshold</th><th>Information Gain</th></tr></thead>
-        <tbody><tr><td>{{ analytics.id3.best_feature }}</td><td>{{ analytics.id3.best_threshold }}</td><td>{{ analytics.id3.information_gain }}</td></tr></tbody>
-    </table></div>
-    <p class="section-note"><b>Important:</b> {{ analytics.id3.note }}</p>
-</section>
+
 {% else %}
 <section class="analysis-section">
     <h2>Additional Data Mining Analysis</h2>
