@@ -478,7 +478,15 @@ def build_notebook_analytics():
         return result
 
 
-ANALYTICS = build_notebook_analytics()
+import os
+
+if os.getenv("ENABLE_ANALYTICS", "false").lower() == "true":
+    ANALYTICS = build_notebook_analytics()
+else:
+    ANALYTICS = {
+        "available": False,
+        "error": "Extended analytics disabled to conserve server memory."
+    }
 
 HTML = """
 <!DOCTYPE html>
